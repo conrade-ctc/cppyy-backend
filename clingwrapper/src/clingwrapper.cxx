@@ -192,34 +192,23 @@ public:
             Interp = existingInterp;
         }
         else {
-#ifdef __arm64__
-#ifdef __APPLE__
-            // If on apple silicon don't use -march=native
+#ifdef CTC_BUILD_HACKS
             std::vector<const char *> InterpArgs({"-std=c++17"});
 #else
-            std::vector<const char *> InterpArgs(
-                {"-std=c++17", "-march=native"});
+            std::vector<const char *> InterpArgs({"-std=c++17"});
 #endif
-#else
-            std::vector <const char *> InterpArgs({"-std=c++17", "-march=native"});
+
+            // If on apple silicon don't use -march=native
+#if !defined(__arm64__) || !defined(__APPLE__)
+            InterpArgs.push_back("-march=native");
 #endif
+
             char *InterpArgString = getenv("CPPINTEROP_EXTRA_INTERPRETER_ARGS");
 
             if (InterpArgString)
               push_tokens_from_string(InterpArgString, InterpArgs);
 
-#ifdef __arm64__
-#ifdef __APPLE__
-            // If on apple silicon don't use -march=native
-            Interp = Cpp::CreateInterpreter({"-std=c++17"}, /*GpuArgs=*/{});
-#else
-            Interp = Cpp::CreateInterpreter({"-std=c++17", "-march=native"},
-                                            /*GpuArgs=*/{});
-#endif
-#else
-            Interp = Cpp::CreateInterpreter({"-std=c++17", "-march=native"},
-                                            /*GpuArgs=*/{});
-#endif
+            Interp = Cpp::CreateInterpreter(InterpArgs, /*GpuArgs=*/{});
         }
 
         // fill out the builtins
@@ -251,7 +240,18 @@ public:
         Cpp::AddIncludePath((ClingSrc + "/tools/cling/include").c_str());
         Cpp::AddIncludePath((ClingSrc + "/include").c_str());
         Cpp::AddIncludePath((ClingBuildDir + "/include").c_str());
+
         Cpp::AddIncludePath((std::string(CPPINTEROP_DIR) + "/include").c_str());
+
+#ifdef CTC_BUILD_HACKS
+	std::vector<std::string> ipaths;
+	Cpp::GetIncludePaths(ipaths, true, false);
+	for(auto path: ipaths) {
+		std::cerr << path << std::endl;
+	}
+	std::cerr << std::endl;
+#endif
+
         Cpp::LoadLibrary("libstdc++", /* lookup= */ true);
 
         // load frequently used headers
