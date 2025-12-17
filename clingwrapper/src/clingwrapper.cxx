@@ -177,46 +177,42 @@ class ApplicationStarter {
   Cpp::TInterp_t Interp;
 public:
     ApplicationStarter() {
-      if (!Cpp::LoadDispatchAPI(
-              CPPINTEROP_DIR
-              "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX)) {
+      std::string CppInterOpLib;
+      if(getenv("CPPINTEROP_LIBRARY"))
+        CppInterOpLib = getenv("CPPINTEROP_LIBRARY");
+#ifdef CPPINTEROP_DIR
+      else
+        CppInterOpLib = CPPINTEROP_DIR "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX;
+#endif
+
+      if (!Cpp::LoadDispatchAPI(CppInterOpLib.c_str())) {
         std::cerr << "[cppyy-backend] Failed to load CppInterOp" << std::endl;
         return;
       }
+
         // Check if somebody already loaded CppInterOp and created an
         // interpreter for us.
         if (auto * existingInterp = Cpp::GetInterpreter()) {
             Interp = existingInterp;
         }
         else {
-#ifdef __arm64__
-#ifdef __APPLE__
-            // If on apple silicon don't use -march=native
+#ifdef CTC_BUILD_HACKS
             std::vector<const char *> InterpArgs({"-std=c++17"});
 #else
-            std::vector<const char *> InterpArgs(
-                {"-std=c++17", "-march=native"});
+            std::vector<const char *> InterpArgs({"-std=c++17"});
 #endif
-#else
-            std::vector <const char *> InterpArgs({"-std=c++17", "-march=native"});
+
+            // If on apple silicon don't use -march=native
+#if !defined(__arm64__) || !defined(__APPLE__)
+            InterpArgs.push_back("-march=native");
 #endif
+
             char *InterpArgString = getenv("CPPINTEROP_EXTRA_INTERPRETER_ARGS");
 
             if (InterpArgString)
               push_tokens_from_string(InterpArgString, InterpArgs);
 
-#ifdef __arm64__
-#ifdef __APPLE__
-            // If on apple silicon don't use -march=native
-            Interp = Cpp::CreateInterpreter({"-std=c++17"}, /*GpuArgs=*/{});
-#else
-            Interp = Cpp::CreateInterpreter({"-std=c++17", "-march=native"},
-                                            /*GpuArgs=*/{});
-#endif
-#else
-            Interp = Cpp::CreateInterpreter({"-std=c++17", "-march=native"},
-                                            /*GpuArgs=*/{});
-#endif
+            Interp = Cpp::CreateInterpreter(InterpArgs, /*GpuArgs=*/{});
         }
 
         // fill out the builtins
@@ -248,7 +244,25 @@ public:
         Cpp::AddIncludePath((ClingSrc + "/tools/cling/include").c_str());
         Cpp::AddIncludePath((ClingSrc + "/include").c_str());
         Cpp::AddIncludePath((ClingBuildDir + "/include").c_str());
+
+#ifdef CPPINTEROP_DIR
         Cpp::AddIncludePath((std::string(CPPINTEROP_DIR) + "/include").c_str());
+#else
+        // gently try to find the place where we put the .so, there should includes there too
+        if(auto slash = CppInterOpLib.find_last_of("/"); slash != std::string::npos) {
+            Cpp::AddIncludePath((CppInterOpLib.substr(0, CppInterOpLib.find_last_of("/")) + "/include").c_str());
+        }
+#endif
+
+#ifdef CTC_BUILD_HACKS
+	std::vector<std::string> ipaths;
+	Cpp::GetIncludePaths(ipaths, true, false);
+	for(auto path: ipaths) {
+		std::cerr << path << std::endl;
+	}
+	std::cerr << std::endl;
+#endif
+
         Cpp::LoadLibrary("libstdc++", /* lookup= */ true);
 
         // load frequently used headers
