@@ -183,32 +183,19 @@ public:
             Interp = existingInterp;
         }
         else {
-#ifdef __arm64__
-#ifdef __APPLE__
+            std::vector<const char *> InterpArgs({"-std=c++20"});
+
             // If on apple silicon don't use -march=native
-            std::vector<const char *> InterpArgs({"-std=c++17"});
-#else
-            std::vector<const char *> InterpArgs(
-                {"-std=c++17", "-march=native"});
+#if !defined(__arm64__) || !defined(__APPLE__)
+            InterpArgs.push_back("-march=native");
 #endif
-#else
-            std::vector <const char *> InterpArgs({"-std=c++17", "-march=native"});
-#endif
+
             char *InterpArgString = getenv("CPPINTEROP_EXTRA_INTERPRETER_ARGS");
 
             if (InterpArgString)
               push_tokens_from_string(InterpArgString, InterpArgs);
 
-#ifdef __arm64__
-#ifdef __APPLE__
-            // If on apple silicon don't use -march=native
-            Interp = Cpp::CreateInterpreter({"-std=c++17"});
-#else
-            Interp = Cpp::CreateInterpreter({"-std=c++17", "-march=native"});
-#endif
-#else
-            Interp = Cpp::CreateInterpreter({"-std=c++17", "-march=native"});
-#endif
+            Interp = Cpp::CreateInterpreter(InterpArgs);
         }
 
         // fill out the builtins
@@ -240,7 +227,22 @@ public:
         Cpp::AddIncludePath((ClingSrc + "/tools/cling/include").c_str());
         Cpp::AddIncludePath((ClingSrc + "/include").c_str());
         Cpp::AddIncludePath((ClingBuildDir + "/include").c_str());
-        Cpp::AddIncludePath((std::string(CPPINTEROP_DIR) + "/include").c_str());
+
+        // gently try to find the place where we put the .so, there should includes there too
+        if(getenv("CPPINTEROP_LIBRARY")) {
+            std::string CppInterOpLib = getenv("CPPINTEROP_LIBRARY");
+            if(auto slash = CppInterOpLib.find_last_of("/"); slash != std::string::npos) {
+                Cpp::AddIncludePath((CppInterOpLib.substr(0, CppInterOpLib.find_last_of("/")) + "/include").c_str());
+            }
+        }
+
+	std::vector<std::string> ipaths;
+	Cpp::GetIncludePaths(ipaths);
+	for(auto path: ipaths) {
+		std::cerr << path << std::endl;
+	}
+	std::cerr << std::endl;
+
         Cpp::LoadLibrary("libstdc++", /* lookup= */ true);
 
         // load frequently used headers
@@ -692,6 +694,13 @@ bool Cppyy::AppendTypesSlow(const std::string& name,
 
 Cppyy::TCppType_t Cppyy::GetType(const std::string &name, bool enable_slow_lookup /* = false */) {
     static unsigned long long var_count = 0;
+
+    // not sure why we need this in CTC env...
+    //std::vector<std::string> exclude{"std", "Cpp", "cling", "cling::runtime", "__cppyy_internal", "Autograph", "SymEngine"};
+    //for(auto const &ex: exclude) {
+    //    if (name == ex)
+    //        return nullptr;
+    //}
 
     if (auto type = Cpp::GetType(name))
         return type;

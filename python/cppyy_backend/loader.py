@@ -90,11 +90,12 @@ def load_cpp_backend():
             bkname += soext
         names.append(bkname)
     except KeyError:
-        names.append('libcppyy-backend'+soext)
+        libname = "libcppyy-backend"
+        names.append(libname+soext)
         if soabi:
-            names.append('libcppyy-backend.'+soabi+soext)
+            names.append(libname+soabi+soext)
         if soext2:
-            names.append('libcppyy-backend'+soext2)
+            names.append(libname+soext2)
 
     err = set()
     for name in names:
@@ -181,6 +182,9 @@ def ensure_precompiled_header(pchdir = '', pchname = ''):
   # distribution as there are too many varieties; create it now if needed
      global _precompiled_header_ensured
      _precompiled_header_ensured = True     # only ever call once, even if failed
+
+     if True:
+         return
 
      olddir = os.getcwd()
      try:

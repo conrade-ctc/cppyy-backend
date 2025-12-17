@@ -2,7 +2,7 @@ releases/
 root-*/
 cling/src/interpreter
 builddir/
-build/
+build*/
 .cling/
 .clingwrapper/
 python/cppyy_backend/include
