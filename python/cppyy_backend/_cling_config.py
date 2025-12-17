@@ -3,9 +3,9 @@ import os, sys, subprocess
 
 MYHOME = os.path.dirname(__file__)
 
-def main():
-    if len(sys.argv) == 2:
-        options = sys.argv[1]
+def main(argv = sys.argv):
+    if len(argv) == 2:
+        options = argv[1]
 
         if options == '--cmake':
             print(os.path.join(MYHOME, "cmake"))
