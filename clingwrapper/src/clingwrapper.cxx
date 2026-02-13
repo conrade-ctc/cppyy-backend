@@ -177,15 +177,9 @@ class ApplicationStarter {
   Cpp::TInterp_t Interp;
 public:
     ApplicationStarter() {
-      std::string CppInterOpLib;
-      if(getenv("CPPINTEROP_LIBRARY"))
-        CppInterOpLib = getenv("CPPINTEROP_LIBRARY");
-#ifdef CPPINTEROP_DIR
-      else
-        CppInterOpLib = CPPINTEROP_DIR "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX;
-#endif
-
-      if (!Cpp::LoadDispatchAPI(CppInterOpLib.c_str())) {
+      if (!Cpp::LoadDispatchAPI(
+              CPPINTEROP_DIR
+              "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX)) {
         std::cerr << "[cppyy-backend] Failed to load CppInterOp" << std::endl;
         return;
       }
@@ -245,14 +239,7 @@ public:
         Cpp::AddIncludePath((ClingSrc + "/include").c_str());
         Cpp::AddIncludePath((ClingBuildDir + "/include").c_str());
 
-#ifdef CPPINTEROP_DIR
         Cpp::AddIncludePath((std::string(CPPINTEROP_DIR) + "/include").c_str());
-#else
-        // gently try to find the place where we put the .so, there should includes there too
-        if(auto slash = CppInterOpLib.find_last_of("/"); slash != std::string::npos) {
-            Cpp::AddIncludePath((CppInterOpLib.substr(0, CppInterOpLib.find_last_of("/")) + "/include").c_str());
-        }
-#endif
 
 #ifdef CTC_BUILD_HACKS
 	std::vector<std::string> ipaths;
