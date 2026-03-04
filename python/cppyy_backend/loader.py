@@ -57,9 +57,9 @@ def _load_helper(bkname):
             pkgpath = os.path.dirname(__file__)
         elif os.path.basename(pkgpath) in ['lib', 'bin']:
             pkgpath = os.path.dirname(pkgpath)
-        return ctypes.CDLL(os.path.join(pkgpath, 'lib', bkname), ctypes.RTLD_GLOBAL), errors
+        return ctypes.CDLL(os.path.join(pkgpath, 'lib', os.path.basename(bkname)), ctypes.RTLD_GLOBAL), errors
     except OSError as e:
-        errors.add(str(e))
+        errors.add(str(e) + f"\n{os.getcwd()=}\n{bkname=}\n{pkgpath=}")
 
     return None, errors
 
