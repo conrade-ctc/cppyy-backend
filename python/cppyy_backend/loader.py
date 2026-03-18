@@ -41,6 +41,70 @@ def is_shared_object_loaded(lib_path):
     except:
         return False # Library was not loaded.
 
+def _bkname_helper(bkname):
+    # FIXME: yuck, lib artifacts hack...
+    # try to find .so file...
+    doit = False
+    cur = os.getcwd()
+    bmainoff = cur.find("execroot/_main") + 14
+    basemain = cur[:bmainoff] + "/external/"
+    if cur.endswith("execroot/_main"):
+        if bkname.startswith("lib"):
+            bkname = cur + "execroot/_main/bazel-out/k8-dbg/bin/external/cppjit-backend/python/cppyy_backend/lib/libcppyy-backend.so"
+        else:
+            bkname = bkname.replace("execroot/_main/external", "execroot/_main/bazel-out/k8-dbg/bin/external")
+        if os.path.exists(bkname):
+            baseend = bkname.find("/bin/external") + 14
+            basedir = bkname[:baseend]
+            doit = True
+
+    elif not os.path.exists(bkname) and bkname.find("execroot/_main/external"):
+        bkname = bkname.replace("execroot/_main/external", "execroot/_main/bazel-out/k8-dbg/bin/external")
+        if os.path.exists(bkname):
+            baseend = bkname.find("/bin/external") + 14
+            basedir = bkname[:baseend]
+            basemain = basedir
+            doit = True
+
+    if bkname.startswith("../cpp"):
+        mainoff = cur.rfind("runfiles/_main")
+        if mainoff > 0:
+            basedir = cur[:mainoff] + "runfiles/"
+            basemain = basedir
+            bkname = basedir + bkname[3:]
+            doit = True
+
+    if doit:
+        #  force pre-load of libclang.so and libclang-cpp.so backend load works
+        ctypes.CDLL(basemain + "llvm/lib/libclang.so", ctypes.RTLD_GLOBAL)
+        ctypes.CDLL(basemain + "llvm/lib/libclang-cpp.so", ctypes.RTLD_GLOBAL)
+
+        # and force load of CppInterOp from the right location as well
+        os.environ["CPPINTEROP_LIB_PATH"] = basedir + "CppInterOp/lib/libclangCppInterOp.so"
+        os.environ["CPPINTEROP_INCLUDE_PATH"] = basemain + "CppInterOp/include"
+
+        sys.path.append(basedir + "CPyCppjit")
+
+        if "CPPYY_API_PATH" not in os.environ:
+            os.environ["CPPYY_API_PATH"] = basemain + "CPyCppjit/include"
+
+        # and fix all the args in for interop
+        if "CPPINTEROP_EXTRA_INTERPRETER_ARGS" in os.environ:
+            args = os.environ["CPPINTEROP_EXTRA_INTERPRETER_ARGS"]
+            args = args.replace("-isystem../llvm", "-isystem" + basemain + "llvm")
+            args = args.replace("-isystem../gcc", "-isystem" + basemain + "gcc")
+            os.environ["CPPINTEROP_EXTRA_INTERPRETER_ARGS"] = args
+        else:
+            os.environ["CPPINTEROP_EXTRA_INTERPRETER_ARGS"] = " ".join([
+                "-isystem" + basemain + "llvm/lib/clang/21/include",
+                "-stdlib++-isystem" + basemain + "gcc/include/c++/14.2.0",
+                "-stdlib++-isystem" + basemain + "gcc/include/c++/14.2.0/x86_64-pc-linux-gnu",
+                "-std=c++20",
+            ])
+
+    return bkname
+
+
 def _load_helper(bkname):
     errors = set()
 
@@ -57,7 +121,9 @@ def _load_helper(bkname):
             pkgpath = os.path.dirname(__file__)
         elif os.path.basename(pkgpath) in ['lib', 'bin']:
             pkgpath = os.path.dirname(pkgpath)
-        return ctypes.CDLL(os.path.join(pkgpath, 'lib', os.path.basename(bkname)), ctypes.RTLD_GLOBAL), errors
+
+        new_bkname = _bkname_helper(os.path.join(pkgpath, 'lib', os.path.basename(bkname)))
+        return ctypes.CDLL(new_bkname, ctypes.RTLD_GLOBAL), errors
     except OSError as e:
         errors.add(str(e) + f"\n{os.getcwd()=}\n{bkname=}\n{pkgpath=}")
 
@@ -78,6 +144,7 @@ def load_cpp_backend():
         bkname = os.environ['CPPYY_BACKEND_LIBRARY']
         if bkname.rfind(soext) < 0:
             bkname += soext
+        bkname = _bkname_helper(bkname)
         names.append(bkname)
     except KeyError:
         names.append('libcppyy-backend'+soext)

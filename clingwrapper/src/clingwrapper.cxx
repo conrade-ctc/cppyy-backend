@@ -177,9 +177,18 @@ class ApplicationStarter {
 public:
     ApplicationStarter() {
         std::lock_guard<std::recursive_mutex> Lock(InterOpMutex);
-        if (!Cpp::LoadDispatchAPI(
-                CPPINTEROP_DIR
-                "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX)) {
+
+	std::string CppInterOpLib;
+        if(char *lib = getenv("CPPINTEROP_LIB_PATH")) {
+            CppInterOpLib = lib;
+            std::cerr << "[cppyy-backend] loading CppInterOp from " << CppInterOpLib << std::endl;
+        }
+#if defined(CPPINTEROP_DIR) && defined(CMAKE_SHARED_LIBRARY_SUFFIX)
+        else
+            CppInterOpLib = CPPINTEROP_DIR "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX;
+#endif
+
+        if (!Cpp::LoadDispatchAPI(CppInterOpLib.c_str())) {
             std::cerr << "[cppyy-backend] Failed to load CppInterOp" << std::endl;
             return;
         }
@@ -189,11 +198,7 @@ public:
             Interp = existingInterp;
         }
         else {
-#ifdef CTC_BUILD_HACKS
             std::vector<const char *> InterpArgs({"-std=c++17"});
-#else
-            std::vector<const char *> InterpArgs({"-std=c++17"});
-#endif
 
             // If on apple silicon don't use -march=native
 #if !defined(__arm64__) || !defined(__APPLE__)
@@ -238,7 +243,12 @@ public:
         Cpp::AddIncludePath((ClingSrc + "/include").c_str());
         Cpp::AddIncludePath((ClingBuildDir + "/include").c_str());
 
+        if(char *inc = getenv("CPPINTEROP_INCLUDE_PATH"))
+            Cpp::AddIncludePath(inc);
+
+#ifdef CPPINTEROP_DIR
         Cpp::AddIncludePath((std::string(CPPINTEROP_DIR) + "/include").c_str());
+#endif
 
 #ifdef CTC_BUILD_HACKS
 	std::vector<std::string> ipaths;
