@@ -1,0 +1,48 @@
+# Best-effort, NON-GATING Bazel build. CMake is the supported build for
+# cppyy-backend; this job is informational only and must never gate CI:
+# it runs continue-on-error and every step swallows failures into warnings.
+name: bazel
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  bazel-build:
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - name: Checkout cppyy-backend
+        uses: actions/checkout@v4
+        with:
+          path: cppyy-backend
+
+      # Siblings needed so the local_path_overrides (../cppyy/bazel,
+      # ../CppInterOp) resolve.
+      - name: Checkout cppyy
+        uses: actions/checkout@v4
+        with:
+          repository: compiler-research/cppyy
+          path: cppyy
+
+      - name: Checkout CppInterOp
+        uses: actions/checkout@v4
+        with:
+          repository: compiler-research/CppInterOp
+          path: CppInterOp
+
+      - name: Fetch LLVM
+        run: |
+          set -e
+          LLVM_VER=20.1.0
+          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VER}/clang+llvm-${LLVM_VER}-x86_64-linux-gnu-ubuntu-18.04.tar.xz"
+          mkdir -p "$HOME/llvm"
+          curl -L "$URL" | tar -xJ -C "$HOME/llvm" --strip-components=1
+          echo "LLVM_DIR=$HOME/llvm" >> "$GITHUB_ENV"
+        continue-on-error: true
+
+      - name: Build //:solib //:pylib
+        working-directory: cppyy-backend
+        run: |
+          bazelisk build //:solib //:pylib \
+            || echo "::warning::Bazel build failed (non-gating; CMake is the supported build)"
