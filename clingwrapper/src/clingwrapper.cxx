@@ -14,7 +14,10 @@
 
 #ifndef _WIN32
 #include <dlfcn.h>
+#include <unistd.h>     // for access
 #endif
+
+#include <filesystem>   // for self-location path handling
 
 // Standard
 #include <cassert>
@@ -90,6 +93,67 @@ static struct Signalmap_t {
    { SIGUSR2,   "user-defined signal 2" }
 };
 
+// Self-location: both the wheel and the Bazel build place this library at
+// <pkg>/lib/libcppyy-backend.so with CppInterOp bundled beside it (the wheel
+// by packaging, Bazel by staged symlinks), so resources resolve relative to
+// our own load path -- no environment or install prefix required.
+// The result is absolutized (against cwd at load time, when relative) and
+// lexically normalized, matching ELF $ORIGIN semantics: dladdr reports the
+// path the library was loaded by, which can be relative or carry ".."
+// components (e.g. via a relative LD_LIBRARY_PATH entry), and some consumers
+// of derived paths (clang's -resource-dir) don't tolerate the dotted form.
+// Deliberately NOT realpath(): resolving the file symlink would escape
+// relocatable install layouts that link the library from elsewhere.
+static std::string self_lib_dir() {
+#ifndef _WIN32
+    Dl_info info;
+    if (!dladdr((void*)&self_lib_dir, &info) || !info.dli_fname)
+        return "";
+    std::error_code ec;
+    std::filesystem::path p(info.dli_fname);
+    if (p.is_relative()) {
+        std::filesystem::path cwd = std::filesystem::current_path(ec);
+        if (ec)
+            return "";
+        p = cwd / p;
+    }
+    return p.parent_path().lexically_normal().string();
+#else
+    return "";
+#endif
+}
+
+static std::string self_package_dir() {
+    std::string libdir = self_lib_dir();
+    std::string::size_type pos = libdir.rfind('/');
+    if (pos == std::string::npos)
+        return "";
+    return libdir.substr(0, pos);
+}
+
+// ${ORIGIN} expansion for CPPINTEROP_EXTRA_INTERPRETER_ARGS: the token stands
+// for the directory of this library itself, mirroring ELF rpath $ORIGIN
+// semantics. Args in a relocatable install (site-packages, conda prefix, a
+// Bazel runfiles tree) can reference nearby resources without anyone knowing
+// an absolute path up front. If the token is present but our own location is
+// unknown, warn and pass the arg through verbatim so the interpreter reports
+// it visibly.
+static std::string expand_origin(const std::string& arg, const std::string& origin) {
+    static const std::string PH = "${ORIGIN}";
+    if (arg.find(PH) == std::string::npos)
+        return arg;
+    if (origin.empty()) {
+        std::cerr << "[cppyy-backend] cannot resolve ${ORIGIN} for '" << arg
+                  << "'" << std::endl;
+        return arg;
+    }
+    std::string result = arg;
+    std::string::size_type pos;
+    while ((pos = result.find(PH)) != std::string::npos)
+        result = result.substr(0, pos) + origin + result.substr(pos + PH.size());
+    return result;
+}
+
 static inline
 void push_tokens_from_string(char *s, std::vector <const char*> &tokens) {
     char *token = strtok(s, " ");
@@ -115,13 +179,32 @@ public:
     ApplicationStarter() {
         std::lock_guard<std::recursive_mutex> Lock(InterOpMutex);
 
+#ifdef CMAKE_SHARED_LIBRARY_SUFFIX
+#define CPPYY_SOEXT CMAKE_SHARED_LIBRARY_SUFFIX
+#elif defined(__APPLE__)
+#define CPPYY_SOEXT ".dylib"
+#else
+#define CPPYY_SOEXT ".so"
+#endif
+
 	std::string CppInterOpLib;
         if(char *lib = getenv("CPPINTEROP_LIB_PATH")) {
             CppInterOpLib = lib;
             std::cerr << "[cppyy-backend] loading CppInterOp from " << CppInterOpLib << std::endl;
         }
+#ifndef _WIN32
+        if (CppInterOpLib.empty()) {
+            // bundled beside this library (wheel and Bazel-staged layouts)
+            std::string libdir = self_lib_dir();
+            if (!libdir.empty()) {
+                std::string candidate = libdir + "/libclangCppInterOp" CPPYY_SOEXT;
+                if (::access(candidate.c_str(), F_OK) == 0)
+                    CppInterOpLib = candidate;
+            }
+        }
+#endif
 #if defined(CPPINTEROP_DIR) && defined(CMAKE_SHARED_LIBRARY_SUFFIX)
-        else
+        if (CppInterOpLib.empty())
             CppInterOpLib = CPPINTEROP_DIR "/lib/libclangCppInterOp" CMAKE_SHARED_LIBRARY_SUFFIX;
 #endif
 
@@ -144,8 +227,30 @@ public:
 
             char *InterpArgString = getenv("CPPINTEROP_EXTRA_INTERPRETER_ARGS");
 
-            if (InterpArgString)
-              push_tokens_from_string(InterpArgString, InterpArgs);
+            // owns the expanded arg strings for the lifetime of the process
+            // (CreateInterpreter keeps the char*s)
+            static std::vector<std::string> ExpandedArgs;
+            if (InterpArgString) {
+                std::vector<const char*> RawArgs;
+                push_tokens_from_string(InterpArgString, RawArgs);
+                std::string Origin = self_lib_dir();
+                std::string Joined;
+                for (const char* a : RawArgs) {
+                    ExpandedArgs.push_back(expand_origin(a, Origin));
+                    if (!Joined.empty()) Joined += ' ';
+                    Joined += ExpandedArgs.back();
+                }
+                for (const std::string& a : ExpandedArgs)
+                    InterpArgs.push_back(a.c_str());
+#ifndef _WIN32
+                // CreateInterpreter re-reads this env var and appends its
+                // tokens after ours; publish the expanded form so both
+                // readers agree. This also repairs the buffer truncation the
+                // strtok tokenization above leaves behind (the re-reader
+                // would otherwise see only the first token).
+                setenv("CPPINTEROP_EXTRA_INTERPRETER_ARGS", Joined.c_str(), 1);
+#endif
+            }
 
             Interp = Cpp::CreateInterpreter(InterpArgs, /*GpuArgs=*/{});
         }
@@ -182,6 +287,16 @@ public:
 
         if(char *inc = getenv("CPPINTEROP_INCLUDE_PATH"))
             Cpp::AddIncludePath(inc);
+
+#ifndef _WIN32
+        // bundled beside this library (wheel and Bazel-staged layouts)
+        {
+            std::string pkginc = self_package_dir() + "/include";
+            if (!self_package_dir().empty() &&
+                    ::access((pkginc + "/CppInterOp").c_str(), F_OK) == 0)
+                Cpp::AddIncludePath(pkginc.c_str());
+        }
+#endif
 
 #ifdef CPPINTEROP_DIR
         Cpp::AddIncludePath((std::string(CPPINTEROP_DIR) + "/include").c_str());
