@@ -1,6 +1,7 @@
 # Explicit load instead of the native symbol: consumers may build with
 # Starlark rule autoloads disabled.
 load("@rules_python//python:defs.bzl", "py_library")
+load("@@rules_cc+//cc:defs.bzl", "cc_library", "cc_shared_library")
 
 load("@cppyy_bazel//:defs.bzl", "BASE_COPTS", "repo_loc")
 load("@cppyy_bazel//:staging.bzl", "stage_files")
