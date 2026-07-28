@@ -513,6 +513,16 @@ bool Cppyy::AppendTypesSlow(const std::string& name,
   // outside the query scope, e.g. `typedef Foo Bar;` at TU consulted
   // from a method on Foo).
   if (is_identifier(name)) {
+    // Non-type entity (variable, enum constant): pass its name; Sema needs an
+    // expression, not the entity's type.
+    TCppScope_t named = parent ? Cpp::GetNamed(name, parent) : nullptr;
+    if (!named)
+      named = Cpp::GetNamed(name);
+    if (named && (Cpp::IsVariable(named) || Cpp::IsEnumConstant(named))) {
+      types.emplace_back(Cpp::GetTypeFromScope(named).data,
+                         strdup(Cpp::GetQualifiedCompleteName(named).c_str()));
+      return false;
+    }
     TCppType_t type = parent ? Cpp::GetType(name, parent) : nullptr;
     if (!type)
       type = Cpp::GetType(name);
@@ -580,10 +590,14 @@ bool Cppyy::AppendTypesSlow(const std::string& name,
 
     if (is_integral(i))
         integral_value = strdup(i.c_str());
-    if (TCppScope_t scope = GetEnumFromCompleteName(i))
+    if (TCppScope_t scope = GetEnumFromCompleteName(i)) {
       if (Cpp::IsEnumConstant(scope))
         integral_value =
             strdup(std::to_string(Cpp::GetEnumConstantValue(scope)).c_str());
+      // Variable: a non-type argument; pass its name (see identifier path).
+      else if (Cpp::IsVariable(scope))
+        integral_value = strdup(Cpp::GetQualifiedCompleteName(scope).c_str());
+    }
     types.emplace_back(type.data, integral_value);
   }
   return false;
